@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/byungsujeong/gocoin/blockchain"
 	"github.com/byungsujeong/gocoin/utils"
+	"github.com/gorilla/mux"
 )
 
-const port string = ":4000"
+var port string
 
 type url string
 
@@ -28,6 +30,10 @@ type urlDescription struct {
 
 type addBlockBody struct {
 	Message string
+}
+
+type errorResponse struct {
+	ErrorMessage string `json:"errorMessage"`
 }
 
 func documentation(rw http.ResponseWriter, r *http.Request) {
@@ -54,7 +60,7 @@ func documentation(rw http.ResponseWriter, r *http.Request) {
 			Description: "See A Block",
 		},
 	}
-	rw.Header().Add("Content-Type", "application/json")
+	// rw.Header().Add("Content-Type", "application/json")
 	json.NewEncoder(rw).Encode(data)
 	// b, err := json.Marshal(data)
 	// utils.HandleErr(err)
@@ -64,18 +70,45 @@ func documentation(rw http.ResponseWriter, r *http.Request) {
 func blocks(rw http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
-		rw.Header().Add("Content-Type", "application/json")
+		// rw.Header().Add("Content-Type", "application/json")
 		json.NewEncoder(rw).Encode(blockchain.GetBlockchain().AllBlocks())
 	case "POST":
 		var addBlockBody addBlockBody
 		utils.HandleErr(json.NewDecoder(r.Body).Decode(&addBlockBody))
 		blockchain.GetBlockchain().AddBlock(addBlockBody.Message)
 		rw.WriteHeader(http.StatusCreated)
+		// default:
+		// 	rw.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
-func Start() {
-	http.HandleFunc("/", documentation)
-	http.HandleFunc("/blocks", blocks)
+
+func block(rw http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	height, err := strconv.Atoi(vars["height"])
+	utils.HandleErr(err)
+	block, err := blockchain.GetBlockchain().GetBlock(height)
+	encoder := json.NewEncoder(rw)
+	if err == blockchain.ErrNotFound {
+		encoder.Encode(errorResponse{fmt.Sprint(err)})
+	} else {
+		encoder.Encode(block)
+	}
+}
+
+func jsonContentTypeMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Add("Content-Type", "application/json")
+		next.ServeHTTP(rw, r)
+	})
+}
+
+func Start(aPort int) {
+	port = fmt.Sprintf(":%d", aPort)
+	router := mux.NewRouter()
+	router.Use(jsonContentTypeMiddleware)
+	router.HandleFunc("/", documentation).Methods("GET")
+	router.HandleFunc("/blocks", blocks).Methods("GET", "POST")
+	router.HandleFunc("/blocks/{height:[0-9]+}", block).Methods("GET")
 	fmt.Printf("Listening on http://localhost%s\n", port)
-	log.Fatal(http.ListenAndServe(port, nil))
+	log.Fatal(http.ListenAndServe(port, router))
 }
